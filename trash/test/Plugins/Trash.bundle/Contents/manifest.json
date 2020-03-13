@@ -1,0 +1,11 @@
+{
+    "name": "Trash",
+    "id": 20000,
+    "commands": [
+        {
+            "theme": "Trash",
+            "syntax": "Trash item(&T;&L):J",
+            "threadSafe": true
+        }
+    ]
+}

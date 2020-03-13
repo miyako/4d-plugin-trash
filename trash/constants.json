@@ -1,0 +1,17 @@
+{
+	"themes": [
+		{
+			"theme": "Trash",
+			"constants": [
+        {
+            "name": "Trash asynchronous",
+            "value": "0:L"
+        },
+        {
+            "name": "Trash synchronous",
+            "value": "1:L"
+        }
+            ]
+        }
+	]
+}

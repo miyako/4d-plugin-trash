@@ -1,0 +1,19 @@
+﻿<?xml version="1.0" encoding="UTF-8" standalone="no" ?>
+<xliff version="1.0" xmlns:d4="http://www.4d.com/d4-ns">
+    <header>
+        <note>Trash</note>
+    </header>
+    <group resname="themes">
+        <trans-unit id="" resname="0898C454928242C8929ACE6FE33DB54C" translate="no">
+            <source>Trash</source>
+        </trans-unit>
+    </group>
+    <group restype="x-4DK#" d4:groupName="0898C454928242C8929ACE6FE33DB54C">
+        <trans-unit d4:value="0:L" id="0898C454928242C8929ACE6FE33DB54C.1">
+            <source>Trash synchronous</source>
+        </trans-unit>
+        <trans-unit d4:value="1:L" id="0898C454928242C8929ACE6FE33DB54C.2">
+            <source>Trash asynchronous</source>
+        </trans-unit>
+    </group>
+</xliff>
