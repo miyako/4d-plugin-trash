@@ -86,7 +86,7 @@ unsigned __stdcall trash_item(void *p) {
 
     if (fmIn)
     {
-        LPVOID bufIn = MapViewOfFile(fmIn, FILE_MAP_READ, 0, 0, len);
+        LPVOID bufIn = MapViewOfFile(fmIn, FILE_MAP_READ, 0, 0, 0);
         if (bufIn)
         {
             unsigned char *p = (unsigned char *)bufIn;
