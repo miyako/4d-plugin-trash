@@ -10,6 +10,13 @@
 
 #include "4DPlugin-Trash.h"
 
+/* plugin-defined error codes, returned in the "error" property when the failure
+   was detected by the plugin itself (not by NSFileManager / SHFileOperation) */
+#define TRASH_ERROR_INVALID_PATH     90001
+#define TRASH_ERROR_BUSY             90002
+#define TRASH_ERROR_DISPATCH_FAILED  90003
+#define TRASH_ERROR_EXCEPTION        90004
+
 #pragma mark -
 
 void PluginMain(PA_long32 selector, PA_PluginParameters params) {
@@ -46,6 +53,13 @@ void ob_set_s(PA_ObjectRef obj, const wchar_t *_key, NSString *_value) {
     
     ob_set_a(obj, _key, &u16);
 }
+
+/* releases an NSObject on scope exit, including when a C++ exception unwinds */
+struct ns_object_release {
+    id _o;
+    ns_object_release(id o) : _o(o) {}
+    ~ns_object_release() { [_o release]; }
+};
 #endif
 
 #if VERSIONWIN
@@ -54,7 +68,9 @@ void ob_set_s(PA_ObjectRef obj, const wchar_t *_key, NSString *_value) {
      
      UUID uuid;
      RPC_WSTR flagPtr;
-     if(UuidCreate(&uuid) == RPC_S_OK) {
+     RPC_STATUS status = UuidCreate(&uuid);
+     /* RPC_S_UUID_LOCAL_ONLY is still unique on this machine, which is all we need */
+     if((status == RPC_S_OK) || (status == RPC_S_UUID_LOCAL_ONLY)) {
          if(UuidToString(&uuid, &flagPtr) == RPC_S_OK) {
              uuid_string = std::wstring((const wchar_t *)flagPtr, wcslen((const wchar_t *)flagPtr));
              RpcStringFree(&flagPtr);
@@ -64,85 +80,113 @@ void ob_set_s(PA_ObjectRef obj, const wchar_t *_key, NSString *_value) {
      return false;
  }
 
-unsigned __stdcall trash_item(void *p) {
-
-    BOOL success = FALSE;
-	int res = 0;
-
-    DWORD path_size = 0;
-    DWORD uuid_size = 0;
+/* SHFileOperation takes a NUL-separated list of patterns, so the path must be a
+   single, fully qualified, wildcard-free name */
+static bool is_valid_trash_path(const std::wstring &path) {
     
+    if(path.empty() || (path.length() > 32767)) return false;
+    if(path.find(L'\0') != std::wstring::npos) return false;
+    if(path.find_first_of(L"*?") != std::wstring::npos) return false;
+    
+    /* drive-letter path (C:\...) */
+    if((path.length() >= 3)
+       && (((path[0] >= L'A') && (path[0] <= L'Z')) || ((path[0] >= L'a') && (path[0] <= L'z')))
+       && (path[1] == L':')
+       && ((path[2] == L'\\') || (path[2] == L'/'))) return true;
+    
+    /* UNC path (\\server\share\...) */
+    if((path.length() >= 3) && (path[0] == L'\\') && (path[1] == L'\\')) return true;
+    
+    return false;
+}
+
+unsigned __stdcall trash_item(void *) {
+
     std::wstring path;
     std::wstring uuid;
+    bool success = false;
     
-	DWORD len = (sizeof(DWORD) * 2);
-
-    HANDLE fmIn = CreateFileMapping(
-                                    INVALID_HANDLE_VALUE,
-                                    NULL,
-                                    PAGE_READWRITE,
-                                    0, len,
-                                    L"TRASH_PARAM_IN");
-
-    if (fmIn)
+    try
     {
-        LPVOID bufIn = MapViewOfFile(fmIn, FILE_MAP_READ, 0, 0, 0);
-        if (bufIn)
+        /* open (not create) the mapping the caller prepared */
+        HANDLE fmIn = OpenFileMapping(FILE_MAP_READ, FALSE, L"TRASH_PARAM_IN");
+
+        if (fmIn)
         {
-            unsigned char *p = (unsigned char *)bufIn;
-            try
+            LPVOID bufIn = MapViewOfFile(fmIn, FILE_MAP_READ, 0, 0, 0);
+            if (bufIn)
             {
-                CopyMemory(&path_size, p, sizeof(DWORD));
-                p += sizeof(DWORD);
-                CopyMemory(&uuid_size, p, sizeof(DWORD));
-                p += sizeof(DWORD);
-
-                std::vector<unsigned char>_path(path_size);
-                std::vector<unsigned char>_uuid(uuid_size);
+                SIZE_T avail = 0;
+                MEMORY_BASIC_INFORMATION mbi;
+                if(VirtualQuery(bufIn, &mbi, sizeof(mbi))) {
+                    avail = mbi.RegionSize;
+                }
                 
-                if(path_size) {
-                    CopyMemory(&_path[0], p, path_size);
-                    p += path_size;
-                    path = std::wstring((const wchar_t *)&_path[0], path_size / sizeof(wchar_t));
+                const unsigned char *p = (const unsigned char *)bufIn;
+                
+                if(avail >= (sizeof(DWORD) * 2))
+                {
+                    DWORD path_size = 0;
+                    DWORD uuid_size = 0;
                     
-                    success = TRUE;
+                    CopyMemory(&path_size, p, sizeof(DWORD));
+                    p += sizeof(DWORD);
+                    CopyMemory(&uuid_size, p, sizeof(DWORD));
+                    p += sizeof(DWORD);
+                    
+                    /* never trust sizes read from shared memory */
+                    ULONGLONG total = (ULONGLONG)path_size + (ULONGLONG)uuid_size;
+                    
+                    if(path_size && uuid_size
+                       && ((path_size % sizeof(wchar_t)) == 0)
+                       && ((uuid_size % sizeof(wchar_t)) == 0)
+                       && (total <= (ULONGLONG)(avail - (sizeof(DWORD) * 2))))
+                    {
+                        path.assign(path_size / sizeof(wchar_t), L'\0');
+                        CopyMemory(&path[0], p, path_size);
+                        p += path_size;
+                        
+                        uuid.assign(uuid_size / sizeof(wchar_t), L'\0');
+                        CopyMemory(&uuid[0], p, uuid_size);
+                        
+                        success = true;
+                    }
                 }
                 
-                if(uuid_size) {
-                    CopyMemory(&_uuid[0], p, uuid_size);
-                    p += uuid_size;
-                    uuid = std::wstring((const wchar_t *)&_uuid[0], uuid_size / sizeof(wchar_t));
-                }
-
-            }
-            catch (...)
-            {
-                
+                UnmapViewOfFile(bufIn);
             }
             
-            UnmapViewOfFile(bufIn);
+            CloseHandle(fmIn);
         }
-        
-        
-        CloseHandle(fmIn);
+    }
+    catch (...)
+    {
+        success = false;
     }
 
-    HANDLE pEvent = OpenEvent(EVENT_ALL_ACCESS,
-                              FALSE, /* processes created by this process do not inherit this handle */
-                              uuid.c_str());
-    if (pEvent)
-    {
-        SetEvent(pEvent);
-        CloseHandle(pEvent);
+    /* if parameters could not be read, just end the thread.
+       the caller waits on the thread handle too, so it will notice and not hang. */
+    if(!success) {
+        return 0;
     }
     
-    if(success){
+    try
+    {
+        HANDLE pEvent = OpenEvent(EVENT_MODIFY_STATE,
+                                  FALSE, /* processes created by this process do not inherit this handle */
+                                  uuid.c_str());
+        if (pEvent)
+        {
+            SetEvent(pEvent);
+            CloseHandle(pEvent);
+        }
+        
+        /* double-NUL terminated; the vector is zero-initialised */
+        std::vector<wchar_t>_path(path.length() + 2);
+        memcpy(&_path[0], path.c_str(), path.length() * sizeof(wchar_t));
 
-		std::vector<wchar_t>_path(path.length() + 2);
-		memcpy(&_path[0], path.c_str(), path.length() * sizeof(wchar_t));
-
-        SHFILEOPSTRUCT fileOp;
-        memset(&fileOp, 0x0, sizeof(SHFILEOPSTRUCT));
+        SHFILEOPSTRUCTW fileOp;
+        memset(&fileOp, 0x0, sizeof(SHFILEOPSTRUCTW));
         
         fileOp.hwnd = NULL;
         fileOp.wFunc = FO_DELETE;
@@ -152,17 +196,23 @@ unsigned __stdcall trash_item(void *p) {
         fileOp.pFrom = (PCZZWSTR)&_path.at(0);
         fileOp.pTo = L"\0\0";
 		
-        res = ::SHFileOperation(&fileOp);
+        /* result is intentionally not reported: the caller has already returned */
+        ::SHFileOperationW(&fileOp);
+    }
+    catch (...)
+    {
         
     }
 
-    _endthreadex(0);
+    /* return normally (no _endthreadex): _endthreadex skips C++ destructors,
+       which leaked path / uuid / _path on every call */
     return 0;
 }
 
 HANDLE createFmIn(
                   std::wstring& path,
-                  std::wstring& uuid) {
+                  std::wstring& uuid,
+                  int& error) {
     
     DWORD len = (sizeof(DWORD) * 2);
     
@@ -183,33 +233,34 @@ HANDLE createFmIn(
                                     L"TRASH_PARAM_IN");
     if(fmIn)
     {
+        /* must be checked immediately: another call is using the (global) name */
+        if(GetLastError() == ERROR_ALREADY_EXISTS)
+        {
+            CloseHandle(fmIn);
+            error = TRASH_ERROR_BUSY;
+            return 0;
+        }
+        
         LPVOID bufIn = MapViewOfFile(fmIn,
                                      FILE_MAP_WRITE,
                                      0,
                                      0, len);
         if(bufIn)
         {
-            try
-            {
-                unsigned char *p = (unsigned char *)bufIn;
-                
-                //{meta}
-                CopyMemory(p, &path_size, sizeof(DWORD));
-                p += sizeof(DWORD);
-                CopyMemory(p, &uuid_size, sizeof(DWORD));
-                p += sizeof(DWORD);
-                
-                //{data}
-                CopyMemory(p, path.c_str(), path_size);
-                p += path_size;
-                CopyMemory(p, uuid.c_str(), uuid_size);
-                
-                success = TRUE;
-            }
-            catch(...)
-            {
-                
-            }
+            unsigned char *p = (unsigned char *)bufIn;
+            
+            //{meta}
+            CopyMemory(p, &path_size, sizeof(DWORD));
+            p += sizeof(DWORD);
+            CopyMemory(p, &uuid_size, sizeof(DWORD));
+            p += sizeof(DWORD);
+            
+            //{data}
+            CopyMemory(p, path.c_str(), path_size);
+            p += path_size;
+            CopyMemory(p, uuid.c_str(), uuid_size);
+            
+            success = TRUE;
             UnmapViewOfFile(bufIn);
         }
         if(!success)
@@ -222,12 +273,79 @@ HANDLE createFmIn(
     return fmIn;
 }
 
+/* starts the worker thread and waits only until it has picked up its parameters.
+   returns false if the request could not be handed over. */
+static bool trash_dispatch_async(std::wstring &path, int &error) {
+    
+    error = TRASH_ERROR_DISPATCH_FAILED;
+    
+    bool dispatched = false;
+    
+    std::wstring uuid;
+    
+    if(generate_uuid(uuid)){
+        HANDLE pEvent = CreateEvent(NULL, /* the handle cannot be inherited by child processes */
+                                    TRUE, /* creates a manual-reset event object */
+                                    FALSE, /* initial state of the event object */
+                                    uuid.c_str());
+        if(pEvent){
+            
+            HANDLE fmIn = createFmIn(path, uuid, error);
+            
+            if(fmIn){
+                
+                HANDLE h = (HANDLE)_beginthreadex(NULL /* security: handle not inherited */,
+                                                  0 /* stack size:default */,
+                                                  trash_item,
+                                                  NULL /* arguments */,
+                                                  0 /* init flags:execute immediately */,
+                                                  NULL /* thread id */);
+                
+                if(h)
+                {
+                    /* wait on the event AND the thread, so a thread that dies
+                       before signalling can no longer freeze 4D */
+                    HANDLE waitHandles[2] = { pEvent, h };
+                    BOOL exit = FALSE;
+                    do {
+                        switch (WaitForMultipleObjects(2, waitHandles, FALSE, 100))
+                        {
+                            case WAIT_OBJECT_0:
+                                ResetEvent(pEvent);
+                                dispatched = true;
+                                exit = TRUE;
+                                break;
+                            case WAIT_OBJECT_0 + 1:
+                                /* thread ended: fine only if it signalled first */
+                                dispatched = (WaitForSingleObject(pEvent, 0) == WAIT_OBJECT_0);
+                                exit = TRUE;
+                                break;
+                            case WAIT_TIMEOUT:
+                                PA_YieldAbsolute();
+                                break;
+                            default: /* WAIT_FAILED */
+                                exit = TRUE;
+                                break;
+                        }
+                        
+                    } while (!exit);
+                    
+                    CloseHandle(h);
+                }//h
+                
+                CloseHandle(fmIn);
+            }
+            CloseHandle(pEvent);
+        }
+    }
+    
+    return dispatched;
+}
+
 #endif
 
-void Trash_item(PA_PluginParameters params) {
+static void Trash_item_do(PA_PluginParameters params, PA_ObjectRef returnValue) {
 
-    PA_ObjectRef returnValue = PA_CreateObject();
-    
     PackagePtr pParams = (PackagePtr)params->fParameters;
     
     trash_operation_mode_t trash_operation_mode = (trash_operation_mode_t)PA_GetLongParameter(params, 2);
@@ -237,13 +355,22 @@ void Trash_item(PA_PluginParameters params) {
     
 #if VERSIONMAC
     
-    NSURL *url = Param1.copyUrl();
-    if(url) {
+    @autoreleasepool {
+        
+        NSURL *url = Param1.copyUrl();
+        
+        if(!url) {
+            ob_set_b(returnValue, L"success", false);
+            ob_set_n(returnValue, L"error", TRASH_ERROR_INVALID_PATH);
+            return;
+        }
+        
+        ns_object_release url_guard(url);
         
         NSURL *resultingItemURL = nil;
         NSError *error = nil;
         
-        BOOL success = false;
+        BOOL success = NO;
         
         switch (trash_operation_mode) {
                 
@@ -259,8 +386,8 @@ void Trash_item(PA_PluginParameters params) {
                         NSString *path = (NSString *)CFURLCopyFileSystemPath((CFURLRef)resultingItemURL,
                                                                              kCFURLPOSIXPathStyle);
                         if(path){
+                            ns_object_release path_guard(path);
                             ob_set_s(returnValue, L"path", path);
-                            [path release];
                         }
                     }
                 }else{
@@ -277,7 +404,6 @@ void Trash_item(PA_PluginParameters params) {
                 [[NSWorkspace sharedWorkspace]recycleURLs:@[url] completionHandler:nil];
                 break;
         }
-        [url release];
     }
 #else
     
@@ -286,6 +412,12 @@ void Trash_item(PA_PluginParameters params) {
         
 	std::wstring path = std::wstring((const wchar_t *)u16.c_str(), u16.length());
 
+    if(!is_valid_trash_path(path)) {
+        ob_set_b(returnValue, L"success", false);
+        ob_set_n(returnValue, L"error", TRASH_ERROR_INVALID_PATH);
+        return;
+    }
+    
     switch (trash_operation_mode) {
         
     case trash_operation_synchronous:
@@ -294,8 +426,8 @@ void Trash_item(PA_PluginParameters params) {
 		std::vector<wchar_t>_path(path.length() + 2);
 		memcpy(&_path[0], path.c_str(), path.length() * sizeof(wchar_t));
 
-		SHFILEOPSTRUCT fileOp;
-		memset(&fileOp, 0x0, sizeof(SHFILEOPSTRUCT));
+		SHFILEOPSTRUCTW fileOp;
+		memset(&fileOp, 0x0, sizeof(SHFILEOPSTRUCTW));
 
 		fileOp.hwnd = NULL;
 		fileOp.wFunc = FO_DELETE;
@@ -305,11 +437,10 @@ void Trash_item(PA_PluginParameters params) {
 		fileOp.pFrom = (PCZZWSTR)&_path.at(0);
 		fileOp.pTo = L"\0\0";
 
-		int res = ::SHFileOperation(&fileOp);
-            
-            ob_set_b(returnValue, L"success", (res == 0));
+		int res = ::SHFileOperationW(&fileOp);
             
             if(res != 0){
+                ob_set_b(returnValue, L"success", false);
                 ob_set_n(returnValue, L"error", res);
             }else{
                 ob_set_b(returnValue, L"success", !fileOp.fAnyOperationsAborted);
@@ -319,62 +450,40 @@ void Trash_item(PA_PluginParameters params) {
             
             default:
         {
-				std::wstring uuid;
-
-            if(generate_uuid(uuid)){
-                HANDLE pEvent = CreateEvent(NULL, /* the handle cannot be inherited by child processes */
-                                            TRUE, /* creates a manual-reset event object */
-                                            FALSE, /* initial state of the event object */
-                                            uuid.c_str());
-                if(pEvent){
-                    
-                    HANDLE fmIn = createFmIn(
-                                             path,
-                                             uuid);
-                    
-                    if(fmIn){
-                        
-                        HANDLE h = (HANDLE)_beginthreadex(NULL /* security: handle not inherited */,
-                        0 /* stack size:default */,
-                        trash_item,
-                        NULL /* arguments */,
-                        0 /* init flags:execute immediately */,
-                        NULL /* thread id */);
-                        
-                        if(h)
-                        {
-                            BOOL exit = FALSE;
-                            do {
-                                switch (WaitForSingleObject(pEvent, 100))
-                                {
-                                    case WAIT_ABANDONED:
-                                    case WAIT_FAILED:
-                                        exit = TRUE;
-                                        break;
-                                    case WAIT_TIMEOUT:
-                                        PA_YieldAbsolute();
-                                        break;
-                                    case WAIT_OBJECT_0:
-                                        ResetEvent(pEvent);
-                                        exit = TRUE;
-                                        break;
-                                }
-                                
-                            } while (!exit);
-                            
-                            CloseHandle(h);
-                        }//h
-                        
-                        CloseHandle(fmIn);
-                    }
-                    CloseHandle(pEvent);
-                }
+            int error = 0;
+            
+            if(!trash_dispatch_async(path, error)) {
+                ob_set_b(returnValue, L"success", false);
+                ob_set_n(returnValue, L"error", error);
             }
         }
             break;
     }
 #endif
+}
+
+void Trash_item(PA_PluginParameters params) {
+
+    PA_ObjectRef returnValue = PA_CreateObject();
+    
+    /* the command declares a return value (:J), so PA_ReturnObject must be reached
+       on every path; the catch-all in PluginMain has nothing to return. */
+    try
+    {
+        Trash_item_do(params, returnValue);
+    }
+    catch(...)
+    {
+        try
+        {
+            ob_set_b(returnValue, L"success", false);
+            ob_set_n(returnValue, L"error", TRASH_ERROR_EXCEPTION);
+        }
+        catch(...)
+        {
+            
+        }
+    }
     
     PA_ReturnObject(params, returnValue);
 }
-
