@@ -165,7 +165,7 @@ def bump_branch(sha, branch, mode):
     new = bump(mode)
     run("git", "add", "--", *map(str, SOURCE_PATHS))
     run("git", "commit", "-m", f"chore: bump version to {new}",
-        "-m", "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>")
+        "-m", "Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>")
     if remote_ref(ref) != sha:
         raise ValueError("Selected branch moved during bump; nothing pushed")
     commit = run("git", "rev-parse", "HEAD")

@@ -285,7 +285,7 @@ class GitTests(unittest.TestCase):
                           "-r", new).splitlines())
         self.assertTrue(changed)
         self.assertTrue(changed.issubset(set(map(str, source.SOURCE_PATHS))))
-        self.assertIn("Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>",
+        self.assertIn("Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>",
                       git(self.local, "log", "-1", "--format=%B"))
         pushes = [call for call in run.call_args_list if "push" in call.args]
         self.assertEqual(len(pushes), 1)
