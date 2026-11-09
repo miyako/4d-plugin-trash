@@ -35,7 +35,10 @@ Future bumps coordinate the version assignments in
 `Trash.xcodeproj/project.pbxproj`, literal present version keys in `Info.plist`,
 and `English.lproj/InfoPlist.strings` (including its human-readable version).
 The plist's `$(MARKETING_VERSION)` reference is preserved. Its absent
-`CFBundleVersion` is not invented. `CFBundleInfoDictionaryVersion`, dependencies,
+`CFBundleVersion` is not invented. `CFBundleShortVersionString` is required;
+deleting it, alone or with `CFBundleVersion`, rejects reading and bumping before
+any source writes. Only `CFBundleVersion` is optional.
+`CFBundleInfoDictionaryVersion`, dependencies,
 4D/schema counters, and all checked-in prebuilt bundles/localizations/binaries
 remain unchanged. Strict canonical `X.Y.Z` validation precedes all writes;
 duplicate assignments are rejected, and unrelated bytes, individual line

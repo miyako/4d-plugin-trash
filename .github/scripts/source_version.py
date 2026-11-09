@@ -133,12 +133,13 @@ def read(root=Path(".")):
         raise ValueError("Source Info.plist has invalid serialization") from exc
     if not isinstance(plist, dict):
         raise ValueError("Source Info.plist must be a dictionary")
+    if "CFBundleShortVersionString" not in plist:
+        raise ValueError("Source Info.plist CFBundleShortVersionString is required")
     serialized = list(PLIST_VERSION.finditer(text(root / PLIST)))
-    if len(serialized) != sum(key in plist for key in (
-            "CFBundleShortVersionString", "CFBundleVersion")):
+    if len(serialized) != 1 + ("CFBundleVersion" in plist):
         raise ValueError("Source plist versions must be editable XML strings")
     for key in ("CFBundleShortVersionString", "CFBundleVersion"):
-        if key not in plist:
+        if key == "CFBundleVersion" and key not in plist:
             continue
         value = plist[key]
         if not isinstance(value, str) or resolved.get(REFERENCES.get(value), value) != version:

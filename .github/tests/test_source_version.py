@@ -195,26 +195,39 @@ class SourceTests(unittest.TestCase):
                         self.assertEqual((self.root / name).read_bytes(), data.replace(
                             self.current.encode(), new.encode()))
 
-    def test_optional_plist_versions_are_not_invented(self):
-        for short in (False, True):
-            for build in (False, True):
+    def test_optional_plist_build_version_is_not_invented(self):
+        for build in (False, True):
+            with self.subTest(build=build):
                 self.copy_source()
                 path = self.root / source.PLIST
                 data = plistlib.loads(path.read_bytes())
-                data.pop("CFBundleShortVersionString", None)
+                data["CFBundleShortVersionString"] = self.current
                 data.pop("CFBundleVersion", None)
-                if short:
-                    data["CFBundleShortVersionString"] = self.current
                 if build:
                     data["CFBundleVersion"] = self.current
                 path.write_bytes(plistlib.dumps(data))
                 new = source.bump("minor", self.root)
                 result = plistlib.loads(path.read_bytes())
-                for key, present in (("CFBundleShortVersionString", short),
-                                     ("CFBundleVersion", build)):
-                    self.assertEqual(key in result, present)
-                    if present:
-                        self.assertEqual(result[key], new)
+                self.assertEqual(result["CFBundleShortVersionString"], new)
+                self.assertEqual("CFBundleVersion" in result, build)
+                if build:
+                    self.assertEqual(result["CFBundleVersion"], new)
+
+    def test_missing_required_plist_short_version_rejected_before_writes(self):
+        for build in (True, False):
+            with self.subTest(build=build):
+                self.copy_source()
+                path = self.root / source.PLIST
+                data = plistlib.loads(path.read_bytes())
+                data.pop("CFBundleShortVersionString")
+                if build:
+                    data["CFBundleVersion"] = self.current
+                else:
+                    data.pop("CFBundleVersion", None)
+                path.write_bytes(plistlib.dumps(data))
+                self.assert_rejected()
+                with self.assertRaisesRegex(ValueError, "CFBundleShortVersionString.*required"):
+                    source.read(self.root)
 
     def test_plist_invalid_values_and_types(self):
         for key in ("CFBundleShortVersionString", "CFBundleVersion"):
