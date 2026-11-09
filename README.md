@@ -2,6 +2,97 @@
 
 Moves a file or folder to the system trash (macOS Trash, Windows Recycle Bin) instead of deleting it permanently. On macOS the plugin uses `NSFileManager` for the synchronous mode and `NSWorkspace` for the asynchronous mode. On Windows it uses the shell's `SHFileOperation` call, and starts a worker thread for the asynchronous mode. Every call returns an `Object` describing the outcome.
 
+## Manual versioning and publication
+
+**Bump version** and **Build** are independent manual Actions. Select the branch
+or ref with GitHub's built-in selector; Build has **no custom inputs**. Neither
+branch pushes, pull requests, nor tag pushes start a native build. No publication
+branch gate is imposed.
+
+Run Bump version on a branch and select `patch`, `minor`, or `major`. It checks out
+the exact selected `github.sha`, requires a clean checkout and an unchanged remote
+branch, and commits only source version metadata. Its mandatory executable
+pre-push hook checks Git's actual advertisement: exactly one branch update, the
+selected old SHA, and the literal new direct-child commit SHA. The helper also
+checks the hook initially and immediately before pushing, rejects an empty or
+non-source change or a multi-parent commit, explicitly disables followed tags,
+and verifies the resulting remote SHA. Bump never creates a tag or release,
+builds the plugin, or dispatches another workflow. If the branch moves, dispatch
+again from the new branch tip; do not force-push the generated commit.
+
+### Source authority
+
+The original committed Bump header, introduced at
+`bf36ad206342b231bf43c2f4989bcaa7033a034a` (the rename-follow history begins there),
+explicitly coordinates `MARKETING_VERSION`, `CURRENT_PROJECT_VERSION`, and the
+present Info.plist version keys. Its marketing-first implementation did not
+fulfill that contract. The existing marketing version **1.0.2**, selected by
+commit `9c10eb97f3c38b8abfa4dcaf58912e9cc8561eb2`, remains the intake authority:
+this migration is **not a version increment**. It repairs stale source
+`CURRENT_PROJECT_VERSION` and English localized version text from 1.0.1 to 1.0.2.
+
+Future bumps coordinate the version assignments in
+`Trash.xcodeproj/project.pbxproj`, literal present version keys in `Info.plist`,
+and `English.lproj/InfoPlist.strings` (including its human-readable version).
+The plist's `$(MARKETING_VERSION)` reference is preserved. Its absent
+`CFBundleVersion` is not invented. `CFBundleShortVersionString` is required;
+deleting it, alone or with `CFBundleVersion`, rejects reading and bumping before
+any source writes. Only `CFBundleVersion` is optional.
+`CFBundleInfoDictionaryVersion`, dependencies,
+4D/schema counters, and all checked-in prebuilt bundles/localizations/binaries
+remain unchanged. Strict canonical `X.Y.Z` validation precedes all writes;
+duplicate assignments are rejected, and unrelated bytes, individual line
+endings, UTF-8 BOMs and file modes are preserved.
+
+### Build and retained-state recovery
+
+Run **Build** separately on the desired ref. Every checkout uses the selected
+immutable `github.sha`, not a version tag. A constant repository-wide concurrency
+group serializes Builds across refs without cancelling an earlier run.
+Authenticated, paginated release checks (including drafts) and exact remote tag
+absence checks run both before native work and after all build, metadata,
+signing, notarization and stapling gates. API failures, including 404 responses
+or malformed later pages, fail closed.
+
+The existing native platforms and settings are retained: Windows x64 Release
+using MSBuild v143/Windows SDK 10.0, and the macOS Default target with
+`arm64 x86_64`, deployment override 10.13 and signing disabled during compilation.
+Windows output is read only from the actual vcxproj output,
+`test/plugins/Trash.bundle/contents/windows64/Trash.4DX`, and uploaded at the
+canonical `test/Plugins/Trash.bundle/Contents/Windows64/Trash.4DX` path.
+Freshness cleanup removes only generated executables, plist/localization,
+signatures and intermediates, not entire bundles or unrelated resources.
+Built plist and English localization are checked against selected source;
+the architecture gate requires the exact `arm64` and `x86_64` tokens without
+restricting additional architectures. Signing includes strict verification.
+Both notarization submissions must exit successfully and return JSON status
+`Accepted`; DMG stapling must succeed before the final publication check.
+
+Publication is create-only: POST a new `refs/tags/vX.Y.Z` at the selected SHA,
+verify it remotely, POST a **new public, non-prerelease** release with explicit
+tag, target SHA, name and empty body (the original workflow supplied no custom
+notes), then upload the ZIP and DMG separately to the returned release ID.
+No existing release is reused, patched, deleted, retried or clobbered.
+
+**Failure retains partial remote state.** A tag can remain without a release,
+or a release can retain only some assets. Inspect the failed run, exact remote
+tag SHA, release ID and uploaded assets before taking any manual action. Do not
+rerun Build expecting it to repair that version: any existing tag or release,
+including a draft, blocks publication. Choose a new source version with Bump
+for a fresh publication, or have a maintainer explicitly investigate and decide
+how to handle the retained state outside these workflows. The automation never
+rolls back a tag, release or uploaded asset.
+
+Offline checks (no native compilation, signing, notarization or 4D execution):
+
+```sh
+actionlint
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s .github/tests -v
+```
+
+The native workflow tests execute the actual workflow shell/PowerShell bodies
+with a closed PATH of native-command stubs; they are not native-build evidence.
+
 | Command | Returns | Purpose |
 |---|---|---|
 | [Trash item](#trash-item) | `Object` | Move a file or folder to the trash, synchronously or asynchronously |
