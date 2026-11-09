@@ -56,8 +56,12 @@ class SourceTests(unittest.TestCase):
     def test_live_paths_and_all_bump_modes(self):
         self.assertEqual(source.PROJECT, Path("Trash.xcodeproj/project.pbxproj"))
         self.assertEqual(source.SETTING_COUNT, 6)
-        self.assertEqual(self.current, "1.0.2")
-        for mode, expected in (("patch", "1.0.3"), ("minor", "1.1.0"), ("major", "2.0.0")):
+        major, minor, patch_version = map(int, self.current.split("."))
+        for mode, expected in (
+            ("patch", f"{major}.{minor}.{patch_version + 1}"),
+            ("minor", f"{major}.{minor + 1}.0"),
+            ("major", f"{major + 1}.0.0"),
+        ):
             with self.subTest(mode=mode):
                 self.copy_source()
                 before = self.snapshot()
@@ -360,11 +364,17 @@ class SourceTests(unittest.TestCase):
             original = subprocess.run(["git", "show", f"{baseline}:{name}"], cwd=ROOT,
                                       check=True, capture_output=True).stdout
             if name == source.PROJECT:
-                expected = original.replace(b"CURRENT_PROJECT_VERSION = 1.0.1;",
-                                            b"CURRENT_PROJECT_VERSION = 1.0.2;")
+                expected = original.replace(
+                    b"CURRENT_PROJECT_VERSION = 1.0.1;",
+                    f"CURRENT_PROJECT_VERSION = {self.current};".encode(),
+                ).replace(
+                    b"MARKETING_VERSION = 1.0.2;",
+                    f"MARKETING_VERSION = {self.current};".encode(),
+                )
             elif name == source.LOCALIZED:
-                expected = original.replace(b'"1.0.1"', b'"1.0.2"').replace(
-                    b"version 1.0.1,", b"version 1.0.2,")
+                expected = original.replace(
+                    b'"1.0.1"', f'"{self.current}"'.encode(),
+                ).replace(b"version 1.0.1,", f"version {self.current},".encode())
             else:
                 expected = original
             self.assertEqual((ROOT / name).read_bytes(), expected)
