@@ -24,6 +24,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Unsigned synthetic host with ASan and UBSan
         run: |
           python3 .github/tests/test_ownership.py

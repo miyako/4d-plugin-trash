@@ -187,6 +187,9 @@ packaging, and notarization/upload effects and its launch action targets real
 manual dispatch, workflow rerun, or dependency installation is performed.
 The new Ownership workflow is unsigned, read-only, path-filtered, push-only on
 the exact audit branch and master; it runs only this host, not release scripts.
+Its checkout fetches full history because the preservation tests read the
+pinned original commit; the first CI run passed all 171 ownership cases but
+exposed the default shallow checkout's missing baseline.
 The preservation test allows only the four explicitly corrected native files
 in addition to its pre-existing version/release exceptions. Existing release
 workflows, project/manifest/version metadata, SDK implementations/ABI headers,
