@@ -83,7 +83,8 @@ for a fresh publication, or have a maintainer explicitly investigate and decide
 how to handle the retained state outside these workflows. The automation never
 rolls back a tag, release or uploaded asset.
 
-Offline checks (no native compilation, signing, notarization or 4D execution):
+Maintenance checks (no signing, notarization or 4D execution; on macOS,
+the ownership test compiles an unsigned synthetic native host):
 
 ```sh
 actionlint
@@ -92,6 +93,14 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s .github/tests -v
 
 The native workflow tests execute the actual workflow shell/PowerShell bodies
 with a closed PATH of native-command stubs; they are not native-build evidence.
+
+For the in-memory ownership regression alone, run
+`python3 .github/tests/test_ownership.py` on macOS. It compiles the complete
+bundled SDK, all wrappers and the actual dispatcher with trash/recycle/path
+operations replaced before compilation, and checks imports before dispatch.
+It never operates on real files or Trash. See the
+[ownership audit](.github/tests/ownership-audit.md) for baseline failures,
+ownership contracts, provenance, coverage and deferred SDK/OOM limitations.
 
 | Command | Returns | Purpose |
 |---|---|---|
