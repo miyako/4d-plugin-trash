@@ -1,0 +1,32 @@
+name: Ownership
+
+on:
+  push:
+    branches:
+      - miyako-trash-ownership-audit
+      - master
+    paths:
+      - '4D Plugin API/**'
+      - 'support/**'
+      - '4DPlugin-Trash.cpp'
+      - '4DPlugin-Trash.h'
+      - '.github/tests/ownership*'
+      - '.github/tests/test_ownership.py'
+      - '.github/tests/test_repository_contract.py'
+      - '.github/workflows/ownership.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic-ownership:
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Unsigned synthetic host with ASan and UBSan
+        run: |
+          python3 .github/tests/test_ownership.py
+          python3 .github/tests/test_repository_contract.py
